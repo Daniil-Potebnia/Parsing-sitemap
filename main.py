@@ -23,10 +23,14 @@ class SitemapStates(StatesGroup):
     waiting_for_sitemap_link = State()
 
 
-def parse(sitemap: str) -> dict:
+def parse(sitemap: str) -> (dict, bool):
     res = {'URL': [], 'Title': [], 'Description': [], 'Keywords': [],
            'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
+    if not sitemap.endswith('.xml'):
+        return res, False
     response = requests.get(sitemap)
+    if response.status_code != 200:
+        return res, False
     root = etree.fromstring(response.content)
     namespaces = {
         'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9',
@@ -37,6 +41,9 @@ def parse(sitemap: str) -> dict:
     for url in urls:
         loc = url.find('ns:loc', namespaces).text if url.find('ns:loc', namespaces) is not None else 'Нет URL'
         response = requests.get(loc)
+
+        if response.status_code != 200:
+            continue
 
         res['URL'].append(loc)
 
@@ -54,7 +61,7 @@ def parse(sitemap: str) -> dict:
 
         for i in range(1, 7):
             res[f'h{i}'].append([h.get_text() for h in soup.find_all(f'h{i}')])
-    return res
+    return res, True
 
 
 def write_to_xlsx(data: dict):
@@ -91,10 +98,14 @@ async def sitemap(message: Message, state: FSMContext) -> None:
 @dp.message(StateFilter(SitemapStates.waiting_for_sitemap_link))
 async def getting_link(message: Message, state: FSMContext) -> None:
     url = message.text
-    data = parse(url)
-    res = write_to_xlsx(data)
-    file = BufferedInputFile(res.read(), filename='sitemap.xlsx')
-    await message.answer_document(file)
+    data, ok = parse(url)
+    if ok:
+        res = write_to_xlsx(data)
+        file = BufferedInputFile(res.read(), filename='sitemap.xlsx')
+        await state.clear()
+        await message.answer_document(file)
+    else:
+        await message.answer('Некорректная ссылка')
 
 
 async def main() -> None:
