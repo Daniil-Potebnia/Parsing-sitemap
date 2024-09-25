@@ -28,7 +28,10 @@ def parse(sitemap: str) -> (dict, bool):
            'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
     if not sitemap.endswith('.xml'):
         return res, False
-    response = requests.get(sitemap)
+    try:
+        response = requests.get(sitemap)
+    except:
+        return res, False
     if response.status_code != 200:
         return res, False
     root = etree.fromstring(response.content)
@@ -40,8 +43,10 @@ def parse(sitemap: str) -> (dict, bool):
     urls = root.xpath('//ns:url', namespaces=namespaces)
     for url in urls:
         loc = url.find('ns:loc', namespaces).text if url.find('ns:loc', namespaces) is not None else 'Нет URL'
-        response = requests.get(loc)
-
+        try:
+            response = requests.get(loc)
+        except:
+            continue
         if response.status_code != 200:
             continue
 
