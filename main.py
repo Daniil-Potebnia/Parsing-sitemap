@@ -65,8 +65,8 @@ def write_to_xlsx(data: dict):  # записывает информацию с �
     wb = Workbook()
     ws = wb.active
     ws.append(['URL', 'Title', 'Description', 'Keywords', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'])
-
-    for i in range(len(data[list(data.keys())[0]])):
+    length = len(data[list(data.keys())[0]])
+    for i in range(length):
         ws.append([
             data['URL'][i],
             data['Title'][i],
@@ -130,6 +130,8 @@ async def getting_link(message: Message, state: FSMContext) -> None:
         sitemaps += [url]
         for s in sitemaps:
             data, ok = parse(s)
+            if len(data[list(data.keys())[0]]) == 0:
+                continue
             if ok:
                 await state.clear()
                 res = write_to_xlsx(data)
