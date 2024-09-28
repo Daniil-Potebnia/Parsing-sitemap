@@ -2,7 +2,7 @@ import asyncio
 import os
 import io
 
-import requests
+import aiohttp
 from dotenv import load_dotenv, find_dotenv
 from lxml import etree
 from bs4 import BeautifulSoup
@@ -23,42 +23,48 @@ class SitemapStates(StatesGroup):
     waiting_for_sitemap_link = State()
 
 
-def parse(sp: str) -> (dict, bool):  # собирает с обычных сайтов информацию
+async def parse(sp: str) -> dict:
     sites = {'URL': [], 'Title': [], 'Description': [], 'Keywords': [],
-           'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
-    response, ok = check_and_get_xml(sp)
-    if not ok:
-        return sites, False
-    root = etree.fromstring(response.content)
-    namespaces = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-
-    urls = root.xpath('//ns:url', namespaces=namespaces)
-    for url in urls:
-        loc = url.find('ns:loc', namespaces).text if url.find('ns:loc', namespaces) is not None else 'Нет URL'
+             'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
+    async with aiohttp.ClientSession() as session:
         try:
-            response = requests.get(loc)
+            async with session.get(sp) as response:
+                tasks = []
+                text = await response.text()
+                root = etree.fromstring(text.encode())
+                namespaces = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+
+                urls = root.xpath('//ns:url', namespaces=namespaces)
+                for url in urls:
+                    loc = url.find('ns:loc', namespaces).text if url.find('ns:loc', namespaces) is not None else 'Нет URL'
+                    tasks.append(get_data(session, loc, sites))
+                await asyncio.gather(*tasks)
         except:
-            continue
-        if response.status_code != 200:
-            continue
+            pass
+    return sites
 
-        sites['URL'].append(loc)
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+async def get_data(session, loc, sites):
+    try:
+        async with session.get(loc) as response:
+            sites['URL'].append(loc)
 
-        title = soup.title.string if soup.title else 'Нет title'
-        sites['Title'].append(title)
-        description = soup.find('meta', attrs={'name': 'description'})
-        description = description['content'] if description else 'Нет description'
-        sites['Description'].append(description)
+            soup = BeautifulSoup(await response.text(), 'html.parser')
 
-        keywords = soup.find('meta', attrs={'name': 'keywords'})
-        keywords = keywords['content'] if keywords else 'Нет keywords'
-        sites['Keywords'].append(keywords)
+            title = soup.title.string if soup.title else 'Нет title'
+            sites['Title'].append(title)
+            description = soup.find('meta', attrs={'name': 'description'})
+            description = description['content'] if description else 'Нет description'
+            sites['Description'].append(description)
 
-        for i in range(1, 7):
-            sites[f'h{i}'].append([h.get_text() for h in soup.find_all(f'h{i}')])
-    return sites, True
+            keywords = soup.find('meta', attrs={'name': 'keywords'})
+            keywords = keywords['content'] if keywords else 'Нет keywords'
+            sites['Keywords'].append(keywords)
+
+            for i in range(1, 7):
+                sites[f'h{i}'].append([h.get_text() for h in soup.find_all(f'h{i}')])
+    except:
+        pass
 
 
 def write_to_xlsx(data: dict):  # записывает информацию с сайтов в массив байт
@@ -86,34 +92,22 @@ def write_to_xlsx(data: dict):  # записывает информацию с �
     return output
 
 
-def find_all_sitemaps(sp: str) -> (list, bool):  # находит все сайтмапы
+async def find_all_sitemaps(sp: str) -> list:
     sps = list()
-    response, ok = check_and_get_xml(sp)
-    if not ok:
-        return sps, False
-    root = etree.fromstring(response.content)
-    namespaces = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-    sitemaps = root.xpath('//ns:sitemap', namespaces=namespaces)
-    for s in sitemaps:
-        loc = s.find('ns:loc', namespaces).text if s.find('ns:loc', namespaces) is not None else 'Нет Sitemap'
-        sps.append(loc)
-        res, ok = find_all_sitemaps(loc)
-        if ok:
-            for r in res:
-                sps.append(r)
-    return sps, True
-
-
-def check_and_get_xml(url: str) -> (requests.Response, bool):  # кидает ссылки на все xml
-    if not url.endswith('.xml'):
-        return None, False
     try:
-        response = requests.get(url)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(sp) as response:
+                text = await response.text()
+                root = etree.fromstring(text.encode())
+                namespaces = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+                sitemaps = root.xpath('//ns:sitemap', namespaces=namespaces)
+                for s in sitemaps:
+                    loc = s.find('ns:loc', namespaces).text if s.find('ns:loc', namespaces) is not None else 'Нет Sitemap'
+                    sps.append(loc)
+                    sps.extend(await find_all_sitemaps(loc))
     except:
-        return None, False
-    if response.status_code != 200:
-        return None, False
-    return response, True
+        pass
+    return sps
 
 
 @dp.message(Command('sitemap'))
@@ -125,22 +119,16 @@ async def sitemap(message: Message, state: FSMContext) -> None:
 @dp.message(StateFilter(SitemapStates.waiting_for_sitemap_link))
 async def getting_link(message: Message, state: FSMContext) -> None:
     url = message.text
-    sitemaps, ok = find_all_sitemaps(url)
-    if ok:
-        sitemaps += [url]
-        for s in sitemaps:
-            data, ok = parse(s)
-            if len(data[list(data.keys())[0]]) == 0:
-                continue
-            if ok:
-                await state.clear()
-                res = write_to_xlsx(data)
-                file = BufferedInputFile(res.read(), filename=f'{s[:-4]}.xlsx')
-                await message.answer_document(file)
-            else:
-                await message.answer(f'Некорректная ссылка {s}')
-    else:
-        await message.answer(f'Некорректная ссылка {url}')
+    sitemaps = await find_all_sitemaps(url)
+    sitemaps += [url]
+    for s in sitemaps:
+        data = await parse(s)
+        if len(data[list(data.keys())[0]]) == 0:
+            continue
+        await state.clear()
+        res = write_to_xlsx(data)
+        file = BufferedInputFile(res.read(), filename=f'{s[:-4]}.xlsx')
+        await message.answer_document(file)
 
 
 async def main() -> None:
