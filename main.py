@@ -32,12 +32,12 @@ async def parse(sp: str) -> dict:
                 tasks = []
                 text = await response.text()
                 root = etree.fromstring(text.encode())
-                namespaces = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-
-                urls = root.xpath('//ns:url', namespaces=namespaces)
-                for url in urls:
-                    loc = url.find('ns:loc', namespaces).text if url.find('ns:loc', namespaces) is not None else 'Нет URL'
-                    tasks.append(get_data(session, loc, sites))
+                namespaces = list(root.nsmap.values())
+                for ns in namespaces:
+                    urls = root.xpath('//ns:url', namespaces={'ns': ns})
+                    for url in urls:
+                        loc = url.find('ns:loc', {'ns': ns}).text if url.find('ns:loc', {'ns': ns}) is not None else 'Нет URL'
+                        tasks.append(get_data(session, loc, sites))
                 await asyncio.gather(*tasks)
         except:
             pass
@@ -67,7 +67,7 @@ async def get_data(session, loc, sites):
         pass
 
 
-def write_to_xlsx(data: dict):  # записывает информацию с сайтов в массив байт
+def write_to_xlsx(data: dict):
     wb = Workbook()
     ws = wb.active
     ws.append(['URL', 'Title', 'Description', 'Keywords', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'])
@@ -99,12 +99,13 @@ async def find_all_sitemaps(sp: str) -> list:
             async with session.get(sp) as response:
                 text = await response.text()
                 root = etree.fromstring(text.encode())
-                namespaces = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-                sitemaps = root.xpath('//ns:sitemap', namespaces=namespaces)
-                for s in sitemaps:
-                    loc = s.find('ns:loc', namespaces).text if s.find('ns:loc', namespaces) is not None else 'Нет Sitemap'
-                    sps.append(loc)
-                    sps.extend(await find_all_sitemaps(loc))
+                namespaces = list(root.nsmap.values())
+                for ns in namespaces:
+                    sitemaps = root.xpath('//ns:sitemap', namespaces={'ns': ns})
+                    for s in sitemaps:
+                        loc = s.find('ns:loc', {'ns': ns}).text if s.find('ns:loc', {'ns': ns}) is not None else 'Нет Sitemap'
+                        sps.append(loc)
+                        sps.extend(await find_all_sitemaps(loc))
     except:
         pass
     return sps
